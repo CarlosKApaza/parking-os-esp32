@@ -1,51 +1,53 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ESP32Servo.h>
-#include "SensorIR.h"
 
+#include "Pines.h"
+#include "SensorIR.h"
+#include "Servomotor.h"
+#include "IluminacionAutomatica.h"
 // ======================================
 // 1. WIFI Y SERVIDOR
 // ======================================
 
-const char* WIFI_SSID = "KOKUN";
-const char* WIFI_PASSWORD = "Summer04#";
+const char* WIFI_SSID = "Galaxy A05s 6227";
+const char* WIFI_PASSWORD = "987654321";
 
 const char* URL_SERVIDOR =
-    "http://192.168.1.10:3000/sensores/lecturas";
+    "http://10.207.211.147:3000/sensores/lecturas";
 
 // ======================================
-// 2. SENSORES DE ESTACIONAMIENTO
+// 2. SENSORES Y SERVOMOTORES
 // ======================================
 
-SensorIR sensorP1(35);
-SensorIR sensorP2(32);
+SensorIR sensorP1(PIN_SENSOR_P1);
+SensorIR sensorP2(PIN_SENSOR_P2);
+
+SensorIR sensorEntrada(PIN_SENSOR_ENTRADA);
+SensorIR sensorSalida(PIN_SENSOR_SALIDA);
+
+// Entrada: arriba = 0°, abajo = 90°.
+// Salida: arriba = 90°, abajo = 0°.
+Servomotor servomotorEntrada(
+    PIN_SERVO_ENTRADA,
+    ANGULO_ARRIBA_ENTRADA,
+    ANGULO_ABAJO_ENTRADA
+);
+
+Servomotor servomotorSalida(
+    PIN_SERVO_SALIDA,
+    ANGULO_ARRIBA_SALIDA,
+    ANGULO_ABAJO_SALIDA
+);
+
+IluminacionAutomatica iluminacionAutomatica(
+    PIN_LDR,
+    PIN_FOCOS,
+    UMBRAL_NOCHE_V
+);
 
 // ======================================
-// 3. SENSORES DE LA GARITA
-// ======================================
-
-SensorIR sensorEntrada(36);
-SensorIR sensorSalida(33);
-
-// ======================================
-// 4. SERVOMOTORES
-// ======================================
-
-Servo servoEntrada;
-Servo servoSalida;
-
-const int PIN_SERVO_ENTRADA = 19;
-const int PIN_SERVO_SALIDA = 18;
-
-const int ANGULO_CERRADO = 0;
-const int ANGULO_ABIERTO = 90;
-
-const unsigned long TIEMPO_CIERRE = 2000;
-
-// ======================================
-// 5. ESTADOS DE ESTACIONAMIENTO
+// 3. ESTADOS DE ESTACIONAMIENTO
 // ======================================
 
 struct EstadoSensor {
@@ -65,11 +67,8 @@ struct EstadoSensor {
 EstadoSensor estadoP1;
 EstadoSensor estadoP2;
 
-const unsigned long REPORTE_MS = 30000;
-const unsigned long REINTENTO_MS = 5000;
-
 // ======================================
-// 6. ESTADOS DE LAS BARRERAS
+// 4. ESTADOS DE LAS BARRERAS
 // ======================================
 
 struct EstadoGarita {
@@ -84,17 +83,15 @@ EstadoGarita garitaEntrada;
 EstadoGarita garitaSalida;
 
 // ======================================
-// 7. ENVIAR LECTURA A NESTJS
+// 5. ENVIAR LECTURA A NESTJS
 // ======================================
 
 bool enviarLectura(const char* codigo, bool ocupado) {
-
     if (WiFi.status() != WL_CONNECTED) {
         return false;
     }
 
     HTTPClient http;
-
     http.begin(URL_SERVIDOR);
     http.setTimeout(1500);
     http.addHeader("Content-Type", "application/json");
@@ -107,11 +104,7 @@ bool enviarLectura(const char* codigo, bool ocupado) {
 
     int respuesta = http.POST(json);
 
-    Serial.printf(
-        "POST %s -> HTTP %d\n",
-        codigo,
-        respuesta
-    );
+    Serial.printf("POST %s -> HTTP %d\n", codigo, respuesta);
 
     if (respuesta > 0) {
         Serial.println(http.getString());
@@ -123,7 +116,7 @@ bool enviarLectura(const char* codigo, bool ocupado) {
 }
 
 // ======================================
-// 8. PROCESAR ESTACIONAMIENTOS
+// 6. PROCESAR ESTACIONAMIENTOS
 // ======================================
 
 void procesarSensor(
@@ -135,7 +128,7 @@ void procesarSensor(
 
     bool ocupado = sensor.estaOcupado();
 
-    // Confirmar 3 lecturas consecutivas
+    // Confirmar 3 lecturas consecutivas.
     if (ocupado == control.candidato) {
         if (control.muestras < 3) {
             control.muestras++;
@@ -150,9 +143,11 @@ void procesarSensor(
         control.estadoEstable = ocupado;
     }
 
-    if (!control.confirmado) return;
+    if (!control.confirmado) {
+        return;
+    }
 
-    // Cambio o reporte periodico
+    // Cambio de estado o reporte periódico.
     bool cambio =
         !control.enviado ||
         control.estadoEstable != control.ultimoEnviado;
@@ -161,9 +156,13 @@ void procesarSensor(
         control.enviado &&
         millis() - control.ultimoEnvio >= REPORTE_MS;
 
-    if (!cambio && !reporte) return;
+    if (!cambio && !reporte) {
+        return;
+    }
 
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
 
     if (
         control.ultimoIntento != 0 &&
@@ -174,10 +173,7 @@ void procesarSensor(
 
     control.ultimoIntento = millis();
 
-    bool exito = enviarLectura(
-        codigo,
-        control.estadoEstable
-    );
+    bool exito = enviarLectura(codigo, control.estadoEstable);
 
     if (exito) {
         control.ultimoEnviado = control.estadoEstable;
@@ -187,12 +183,12 @@ void procesarSensor(
 }
 
 // ======================================
-// 9. CONTROL AUTOMATICO DE GÁRITAS
+// 7. CONTROL AUTOMÁTICO DE GARITAS
 // ======================================
 
 void procesarGarita(
     SensorIR& sensor,
-    Servo& servo,
+    Servomotor& servomotor,
     EstadoGarita& control,
     const char* nombre
 ) {
@@ -200,7 +196,7 @@ void procesarGarita(
 
     bool detectado = sensor.estaOcupado();
 
-    // Confirmar 3 muestras consecutivas
+    // Confirmar 3 muestras consecutivas.
     if (detectado == control.candidato) {
         if (control.muestras < 3) {
             control.muestras++;
@@ -210,70 +206,61 @@ void procesarGarita(
         control.muestras = 1;
     }
 
-    // Cancelar cierre si vuelve a detectar
+    // Cancelar el cierre si vuelve a detectar un vehículo.
     if (detectado) {
         control.libreDesde = 0;
     }
 
-    if (control.muestras < 3) return;
+    if (control.muestras < 3) {
+        return;
+    }
 
-    // VEHICULO DETECTADO: ABRIR
+    // VEHÍCULO DETECTADO: SUBIR / ABRIR.
     if (control.candidato) {
-
         if (!control.abierta) {
-            servo.write(ANGULO_ABIERTO);
+            servomotor.subir();
             control.abierta = true;
 
-            Serial.printf(
-                "%s: BARRERA ABIERTA\n",
-                nombre
-            );
+            Serial.printf("%s: BARRERA ABIERTA\n", nombre);
         }
 
         control.libreDesde = 0;
     }
-
-    // SIN VEHICULO: ESPERAR Y CERRAR
+    // SIN VEHÍCULO: ESPERAR Y BAJAR / CERRAR.
     else if (control.abierta) {
-
         if (control.libreDesde == 0) {
             control.libreDesde = millis();
         }
 
-        if (
-            millis() - control.libreDesde >= TIEMPO_CIERRE
-        ) {
-            servo.write(ANGULO_CERRADO);
+        if (millis() - control.libreDesde >= TIEMPO_CIERRE_MS) {
+            servomotor.bajar();
             control.abierta = false;
             control.libreDesde = 0;
 
-            Serial.printf(
-                "%s: BARRERA CERRADA\n",
-                nombre
-            );
+            Serial.printf("%s: BARRERA CERRADA\n", nombre);
         }
     }
 }
 
 // ======================================
-// 10. IMPRIMIR ESTADOS EN SERIAL
+// 8. IMPRIMIR ESTADOS EN SERIAL
 // ======================================
 
 void imprimirEstados() {
-
     Serial.println();
     Serial.println("========== PARKING OS ==========");
 
-    // ESTACIONAMIENTOS
     Serial.printf(
-        "P1 | GPIO 35 | RAW: %d mV | EMA: %.0f | %s\n",
+        "P1 | GPIO %d | RAW: %d mV | EMA: %.0f | %s\n",
+        PIN_SENSOR_P1,
         sensorP1.getLectura(),
         sensorP1.getEMA(),
         sensorP1.estaOcupado() ? "OCUPADO" : "LIBRE"
     );
 
     Serial.printf(
-        "P2 | GPIO 32 | RAW: %d mV | EMA: %.0f | %s\n",
+        "P2 | GPIO %d | RAW: %d mV | EMA: %.0f | %s\n",
+        PIN_SENSOR_P2,
         sensorP2.getLectura(),
         sensorP2.getEMA(),
         sensorP2.estaOcupado() ? "OCUPADO" : "LIBRE"
@@ -281,84 +268,88 @@ void imprimirEstados() {
 
     Serial.println("--------------------------------");
 
-    // SENSOR IR ENTRADA
     Serial.printf(
-        "IR ENTRADA | GPIO 36 | RAW: %d mV | EMA: %.0f | UMBRAL: %d | %s\n",
+        "IR ENTRADA | GPIO %d | RAW: %d mV | EMA: %.0f | UMBRAL: %d | %s\n",
+        PIN_SENSOR_ENTRADA,
         sensorEntrada.getLectura(),
         sensorEntrada.getEMA(),
         sensorEntrada.getUmbral(),
         sensorEntrada.estaOcupado() ? "DETECTA" : "NO DETECTA"
     );
 
-    // SERVO ENTRADA
     Serial.printf(
-        "SERVO ENTRADA | GPIO 19 | %s | ANGULO: %d\n",
+        "SERVO ENTRADA | GPIO %d | %s | ANGULO: %d\n",
+        PIN_SERVO_ENTRADA,
         garitaEntrada.abierta ? "ABIERTO" : "CERRADO",
-        garitaEntrada.abierta ? ANGULO_ABIERTO : ANGULO_CERRADO
+        servomotorEntrada.getAnguloActual()
     );
 
     Serial.println("--------------------------------");
 
-    // SENSOR IR SALIDA
     Serial.printf(
-        "IR SALIDA | GPIO 33 | RAW: %d mV | EMA: %.0f | UMBRAL: %d | %s\n",
+        "IR SALIDA | GPIO %d | RAW: %d mV | EMA: %.0f | UMBRAL: %d | %s\n",
+        PIN_SENSOR_SALIDA,
         sensorSalida.getLectura(),
         sensorSalida.getEMA(),
         sensorSalida.getUmbral(),
         sensorSalida.estaOcupado() ? "DETECTA" : "NO DETECTA"
     );
 
-    // SERVO SALIDA
     Serial.printf(
-        "SERVO SALIDA | GPIO 18 | %s | ANGULO: %d\n",
+        "SERVO SALIDA | GPIO %d | %s | ANGULO: %d\n",
+        PIN_SERVO_SALIDA,
         garitaSalida.abierta ? "ABIERTO" : "CERRADO",
-        garitaSalida.abierta ? ANGULO_ABIERTO : ANGULO_CERRADO
+        servomotorSalida.getAnguloActual()
     );
 
     Serial.println("================================");
 }
 
 // ======================================
-// 11. SETUP
+// 9. SETUP
 // ======================================
 
 void setup() {
-
     Serial.begin(115200);
-
     analogReadResolution(12);
 
-    // Sensores estacionamiento
+    // Indicadores LED
+    pinMode(PIN_LED_ENTRADA_COCHE, OUTPUT);
+    pinMode(PIN_LED_SALIDA_COCHE, OUTPUT);
+    pinMode(PIN_LED_P1_OCUPADO, OUTPUT);
+    pinMode(PIN_LED_P2_OCUPADO, OUTPUT);
+
+    // Iniciar todos apagados
+    digitalWrite(PIN_LED_ENTRADA_COCHE, LOW);
+    digitalWrite(PIN_LED_SALIDA_COCHE, LOW);
+    digitalWrite(PIN_LED_P1_OCUPADO, LOW);
+    digitalWrite(PIN_LED_P2_OCUPADO, LOW);
+
+    // Iluminacion automatica
+    iluminacionAutomatica.iniciar();
+
+    // Sensores de estacionamiento.
     sensorP1.iniciar();
     sensorP2.iniciar();
 
-    // Mantener tus umbrales
+    // Mantener los umbrales originales.
     sensorP1.setUmbral(2750);
     sensorP2.setUmbral(1500);
 
-    // Sensores garita
+    // Sensores de las garitas.
     sensorEntrada.iniciar();
     sensorSalida.iniciar();
 
-    // Umbrales actuales
     sensorEntrada.setUmbral(2500);
     sensorSalida.setUmbral(2000);
 
-    // Configurar servos
-    servoEntrada.setPeriodHertz(50);
-    servoSalida.setPeriodHertz(50);
+    // Los servomotores inician en la posición abajo/cerrada.
+    servomotorEntrada.iniciar();
+    servomotorSalida.iniciar();
 
-    servoEntrada.attach(PIN_SERVO_ENTRADA);
-    servoSalida.attach(PIN_SERVO_SALIDA);
-
-    // Posicion inicial
-    servoEntrada.write(ANGULO_CERRADO);
-    servoSalida.write(ANGULO_CERRADO);
-
-    // WiFi
+    // WiFi.
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
-
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     Serial.println("Parking OS iniciado");
@@ -367,11 +358,10 @@ void setup() {
 }
 
 // ======================================
-// 12. LOOP PRINCIPAL
+// 10. LOOP PRINCIPAL
 // ======================================
 
 void loop() {
-
     static unsigned long ultimoWiFi = 0;
     static bool conectadoAntes = false;
 
@@ -379,64 +369,83 @@ void loop() {
     static unsigned long ultimaLecturaGarita = 0;
     static unsigned long ultimaImpresion = 0;
 
-    // VERIFICAR WIFI
+    // Verificar WiFi.
     if (WiFi.status() == WL_CONNECTED) {
-
         if (!conectadoAntes) {
             Serial.println("WiFi conectado");
             Serial.println(WiFi.localIP());
-
             conectadoAntes = true;
         }
-
     } else {
-
         if (conectadoAntes) {
             Serial.println("WiFi desconectado");
             conectadoAntes = false;
         }
 
-        if (millis() - ultimoWiFi >= 10000) {
+        if (millis() - ultimoWiFi >= INTERVALO_RECONEXION_WIFI_MS) {
             ultimoWiFi = millis();
             WiFi.reconnect();
         }
     }
 
-    // SENSORES ENTRADA Y SALIDA
-    // Cada 100 ms
-    if (millis() - ultimaLecturaGarita >= 100) {
+    
 
+    // Sensores de entrada y salida: cada 100 ms.
+    if (millis() - ultimaLecturaGarita >= INTERVALO_GARITA_MS) {
         ultimaLecturaGarita = millis();
 
+        iluminacionAutomatica.actualizar();
+        
         procesarGarita(
             sensorEntrada,
-            servoEntrada,
+            servomotorEntrada,
             garitaEntrada,
             "ENTRADA"
         );
 
         procesarGarita(
             sensorSalida,
-            servoSalida,
+            servomotorSalida,
             garitaSalida,
             "SALIDA"
         );
     }
 
-    // SENSORES P1 Y P2
-    // Cada 500 ms
-    if (millis() - ultimaLecturaP >= 500) {
-
+    // Sensores P1 y P2: cada 500 ms.
+    if (millis() - ultimaLecturaP >= INTERVALO_ESTACIONAMIENTOS_MS) {
         ultimaLecturaP = millis();
 
         procesarSensor(sensorP1, "IR01", estadoP1);
         procesarSensor(sensorP2, "IR02", estadoP2);
     }
 
-    // IMPRIMIR TODO CADA 500 ms
-    if (millis() - ultimaImpresion >= 500) {
-
+    // Imprimir estados cada 500 ms.
+    if (millis() - ultimaImpresion >= INTERVALO_IMPRESION_MS) {
         ultimaImpresion = millis();
         imprimirEstados();
     }
+
+    // Indicador de vehículo en la entrada
+    digitalWrite(
+        PIN_LED_ENTRADA_COCHE,
+        sensorEntrada.estaOcupado() ? HIGH : LOW
+    );
+
+    // Indicador de vehículo en la salida
+    digitalWrite(
+        PIN_LED_SALIDA_COCHE,
+        sensorSalida.estaOcupado() ? HIGH : LOW
+    );
+
+    // Indicador de puesto 1 ocupado
+    digitalWrite(
+        PIN_LED_P1_OCUPADO,
+        estadoP1.confirmado && estadoP1.estadoEstable ? HIGH : LOW
+    );
+
+    // Indicador de puesto 2 ocupado
+    digitalWrite(
+        PIN_LED_P2_OCUPADO,
+        estadoP2.confirmado && estadoP2.estadoEstable ? HIGH : LOW
+    );
 }

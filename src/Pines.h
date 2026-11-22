@@ -22,6 +22,23 @@ constexpr float UMBRAL_NOCHE_V = 0.5f;
 constexpr uint8_t PIN_SENSOR_P1 = 35;
 constexpr uint8_t PIN_SENSOR_P2 = 32;
 
+// Propuesta SOLO si P3-P7 estan conectados por salida digital DO (3.3 V).
+// IMPORTANTE: no conocemos aun los GPIO reales de tu maqueta.
+// Cambiar estos cinco pines segun el cableado fisico ANTES de habilitar.
+constexpr uint8_t PIN_SENSOR_P3 = 13;
+constexpr uint8_t PIN_SENSOR_P4 = 16;
+constexpr uint8_t PIN_SENSOR_P5 = 17;
+constexpr uint8_t PIN_SENSOR_P6 = 21;
+constexpr uint8_t PIN_SENSOR_P7 = 22;
+
+// Seguro por defecto: no reportar ocupacion falsa mientras no se confirme
+// que P3-P7 usan esos GPIO y salida digital DO.
+constexpr bool HABILITAR_P3_P7 = false;
+
+// Modulos IR de obstaculos DO habituales: LOW = detecta.
+// Si tus modulos funcionan al reves, cambiar a HIGH.
+constexpr uint8_t NIVEL_OCUPADO_DIGITAL = LOW;
+
 // Sensores IR de las garitas
 constexpr uint8_t PIN_SENSOR_ENTRADA = 36;
 constexpr uint8_t PIN_SENSOR_SALIDA = 33;

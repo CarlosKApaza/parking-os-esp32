@@ -23,6 +23,14 @@ const char* URL_SERVIDOR =
 SensorIR sensorP1(PIN_SENSOR_P1);
 SensorIR sensorP2(PIN_SENSOR_P2);
 
+// Los cinco sensores nuevos usan DO digital (no ADC2).
+// Si el cableado utiliza AO analogico, NO activar HABILITAR_P3_P7.
+SensorIR sensorP3(PIN_SENSOR_P3, ModoSensorIR::DIGITAL, NIVEL_OCUPADO_DIGITAL);
+SensorIR sensorP4(PIN_SENSOR_P4, ModoSensorIR::DIGITAL, NIVEL_OCUPADO_DIGITAL);
+SensorIR sensorP5(PIN_SENSOR_P5, ModoSensorIR::DIGITAL, NIVEL_OCUPADO_DIGITAL);
+SensorIR sensorP6(PIN_SENSOR_P6, ModoSensorIR::DIGITAL, NIVEL_OCUPADO_DIGITAL);
+SensorIR sensorP7(PIN_SENSOR_P7, ModoSensorIR::DIGITAL, NIVEL_OCUPADO_DIGITAL);
+
 SensorIR sensorEntrada(PIN_SENSOR_ENTRADA);
 SensorIR sensorSalida(PIN_SENSOR_SALIDA);
 
@@ -66,6 +74,11 @@ struct EstadoSensor {
 
 EstadoSensor estadoP1;
 EstadoSensor estadoP2;
+EstadoSensor estadoP3;
+EstadoSensor estadoP4;
+EstadoSensor estadoP5;
+EstadoSensor estadoP6;
+EstadoSensor estadoP7;
 
 // ======================================
 // 4. ESTADOS DE LAS BARRERAS
@@ -268,6 +281,29 @@ void imprimirEstados() {
 
     Serial.println("--------------------------------");
 
+    if (HABILITAR_P3_P7) {
+        const char* codigo[] = {"P3", "P4", "P5", "P6", "P7"};
+        const uint8_t pines[] = {
+            PIN_SENSOR_P3, PIN_SENSOR_P4, PIN_SENSOR_P5,
+            PIN_SENSOR_P6, PIN_SENSOR_P7
+        };
+        const SensorIR* sensores[] = {
+            &sensorP3, &sensorP4, &sensorP5, &sensorP6, &sensorP7
+        };
+        for (int i = 0; i < 5; i++) {
+            Serial.printf(
+                "%s | GPIO %d | DO: %s | %s\n",
+                codigo[i], pines[i],
+                sensores[i]->getNivelDigital() == LOW ? "LOW" : "HIGH",
+                sensores[i]->estaOcupado() ? "OCUPADO" : "LIBRE"
+            );
+        }
+    } else {
+        Serial.println("P3-P7: pendientes de verificar GPIO y salida DO.");
+    }
+
+    Serial.println("--------------------------------");
+
     Serial.printf(
         "IR ENTRADA | GPIO %d | RAW: %d mV | EMA: %.0f | UMBRAL: %d | %s\n",
         PIN_SENSOR_ENTRADA,
@@ -331,6 +367,13 @@ void setup() {
     // Sensores de estacionamiento.
     sensorP1.iniciar();
     sensorP2.iniciar();
+    if (HABILITAR_P3_P7) {
+        sensorP3.iniciar();
+        sensorP4.iniciar();
+        sensorP5.iniciar();
+        sensorP6.iniciar();
+        sensorP7.iniciar();
+    }
 
     // Mantener los umbrales originales.
     sensorP1.setUmbral(2750);
@@ -353,7 +396,10 @@ void setup() {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     Serial.println("Parking OS iniciado");
-    Serial.println("4 sensores IR y 2 servos");
+    Serial.println("7 plazas P1-P7, 2 sensores de garita y 2 servos");
+    if (!HABILITAR_P3_P7) {
+        Serial.println("[CONFIG] IR03-IR07 DESHABILITADOS: confirma GPIO y DO en Pines.h");
+    }
     Serial.println("Conectando al WiFi...");
 }
 
@@ -411,12 +457,19 @@ void loop() {
         );
     }
 
-    // Sensores P1 y P2: cada 500 ms.
+    // Sensores P1-P7: cada 500 ms.
     if (millis() - ultimaLecturaP >= INTERVALO_ESTACIONAMIENTOS_MS) {
         ultimaLecturaP = millis();
 
         procesarSensor(sensorP1, "IR01", estadoP1);
         procesarSensor(sensorP2, "IR02", estadoP2);
+        if (HABILITAR_P3_P7) {
+            procesarSensor(sensorP3, "IR03", estadoP3);
+            procesarSensor(sensorP4, "IR04", estadoP4);
+            procesarSensor(sensorP5, "IR05", estadoP5);
+            procesarSensor(sensorP6, "IR06", estadoP6);
+            procesarSensor(sensorP7, "IR07", estadoP7);
+        }
     }
 
     // Imprimir estados cada 500 ms.

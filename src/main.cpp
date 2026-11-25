@@ -4,6 +4,7 @@
 #include "SensoresEntradaSalida.h"
 #include "SensoresPosicion.h"
 #include "Servomotor.h"
+#include "ComunicacionServidor.h"
 
 // ==============================================
 // SENSORES Y SERVOMOTORES
@@ -187,6 +188,10 @@ void setup() {
     ultimaLecturaPlazas = ahora;
     ultimaImpresion = ahora;
 
+    // Iniciar red solo despues de terminar la calibracion fisica.
+    ComunicacionServidor::iniciar();
+    if (plazasHabilitadas) ComunicacionServidor::publicar(sensoresPosicion);
+
     Serial.println("Monitoreo iniciado.");
 }
 
@@ -208,6 +213,7 @@ void loop() {
 
         // Lee P1-P7 por el 74HC4051 y actualiza QB-QH en el 74HC595.
         sensoresPosicion.actualizar();
+        ComunicacionServidor::publicar(sensoresPosicion);
     }
 
     if (plazasHabilitadas &&

@@ -129,8 +129,57 @@ void actualizarBarrera(
     }
 }
 
+// Exclusivo para la maqueta supervisada: no existe confirmación física de salida.
+constexpr unsigned long TIEMPO_SALIDA_MAQUETA_MS = 8000;
+unsigned long salidaAbiertaDesde = 0;
+
+void actualizarSalidaOCR(unsigned long ahora, const ComunicacionServidor::Respuesta& respuesta) {
+    auto& estado = barreraSalida.estado;
+    const bool coincide = strcmp(estado.id, respuesta.id) == 0;
+
+    if (estado.fase == FaseGarita::PASO || estado.fase == FaseGarita::CANCELADA) {
+        if (respuesta.accion == Accion::ACK && coincide) {
+            estado = ComunicacionServidor::Garita{};
+        }
+        return;
+    }
+
+    if (estado.fase == FaseGarita::LIBRE) {
+        snprintf(estado.id, sizeof(estado.id), "%s-%lu", arranqueGarita,
+                 static_cast<unsigned long>(++secuenciaGarita));
+        // PRESENCIA en este protocolo es un turno disponible para OCR, no una lectura IR.
+        estado.fase = FaseGarita::PRESENCIA;
+        Serial.println("SALIDA | Lista para OCR y pago (sin IR).");
+        return;
+    }
+
+    if (estado.fase == FaseGarita::PRESENCIA) {
+        if (respuesta.accion == Accion::CANCELAR && coincide) {
+            estado.fase = FaseGarita::CANCELADA;
+            Serial.println("SALIDA | Turno OCR vencido, sin apertura.");
+        } else if (respuesta.accion == Accion::ABRIR && coincide) {
+            servoSalida.subir();
+            barreraSalida.abierta = true;
+            salidaAbiertaDesde = ahora;
+            estado.fase = FaseGarita::ABIERTA;
+            digitalWrite(PIN_LED_SALIDA, HIGH);
+            Serial.println("SALIDA | Pago autorizado. Barrera abierta por 8 segundos.");
+        }
+        return;
+    }
+
+    if (estado.fase == FaseGarita::ABIERTA &&
+        ahora - salidaAbiertaDesde >= TIEMPO_SALIDA_MAQUETA_MS) {
+        servoSalida.bajar();
+        barreraSalida.abierta = false;
+        digitalWrite(PIN_LED_SALIDA, LOW);
+        estado.fase = FaseGarita::PASO;
+        Serial.println("SALIDA | Cierre temporizado (paso no verificado por IR).");
+    }
+}
+
 void leerGaritas() {
-    // Lee GPIO36 y GPIO39 y actualiza los LEDs de GPIO14 y GPIO13.
+    // Entrada conserva su IR. Salida solo usa OCR y pago.
     sensoresGarita.actualizar();
 
     const unsigned long ahora = millis();
@@ -144,10 +193,7 @@ void leerGaritas() {
         servoEntrada, barreraEntrada, ahora, respuesta.zona[0]
     );
 
-    actualizarBarrera(
-        "SALIDA", sensoresGarita.getSensorSalida(),
-        servoSalida, barreraSalida, ahora, respuesta.zona[1]
-    );
+    actualizarSalidaOCR(ahora, respuesta.zona[1]);
     ComunicacionServidor::publicarGaritas(barreraEntrada.estado, barreraSalida.estado);
 }
 
@@ -156,6 +202,10 @@ void leerGaritas() {
 // ==============================================
 
 void imprimirPlazas() {
+    Serial.printf("IR ENTRADA | ADC: %u | EMA: %.1f | Umbral: %u | %s\n",
+        unsigned(sensoresGarita.getValorAnalogicoEntrada()), sensoresGarita.getEMAEntrada(),
+        unsigned(sensoresGarita.getUmbralEntrada()), sensoresGarita.getSensorEntrada() ? "DETECTA" : "LIBRE");
+    Serial.printf("SALIDA | OCR y pago | Servo: %s\n", barreraSalida.abierta ? "ABIERTA" : "CERRADA");
     Serial.println("---------- PLAZAS ----------");
 
     for (uint8_t plaza = 1; plaza <= CANTIDAD_INDICADORES; ++plaza) {

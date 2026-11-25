@@ -105,7 +105,7 @@ void SensoresEntradaSalida::actualizar() {
     objetoSalida  = emaSalida > umbralSalida;
 
     digitalWrite(PIN_LED_ENTRADA, objetoEntrada ? HIGH : LOW);
-    digitalWrite(PIN_LED_SALIDA, objetoSalida ? HIGH : LOW);
+    // El LED de salida lo controla main.cpp durante la apertura autorizada.
 }
 
 bool SensoresEntradaSalida::getLecturaSensorEntrada() const {

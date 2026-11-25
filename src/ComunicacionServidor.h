@@ -7,7 +7,7 @@ namespace ComunicacionServidor {
         char id[32]{};
         FaseGarita fase = FaseGarita::LIBRE;
     };
-    enum class Accion : uint8_t { NINGUNA, ABRIR, ACK };
+    enum class Accion : uint8_t { NINGUNA, ABRIR, ACK, CANCELAR };
     struct Respuesta {
         char id[32]{};
         Accion accion = Accion::NINGUNA;

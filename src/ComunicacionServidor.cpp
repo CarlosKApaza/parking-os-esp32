@@ -79,7 +79,7 @@ namespace {
         http.addHeader("x-esp32-key", ESP32_API_KEY);
         char cuerpo[240];
         snprintf(cuerpo, sizeof(cuerpo),
-            "{\"ENTRADA\":{\"id\":\"%s\",\"fase\":\"%s\"},\"SALIDA\":{\"id\":\"%s\",\"fase\":\"%s\"},\"salidaSinIR\":true}",
+            "{\"ENTRADA\":{\"id\":\"%s\",\"fase\":\"%s\"},\"SALIDA\":{\"id\":\"%s\",\"fase\":\"%s\"},\"salidaSinIR\":true,\"entradaSinIR\":true}",
             s.zona[0].id, faseTexto(s.zona[0].fase), s.zona[1].id, faseTexto(s.zona[1].fase));
         const unsigned long inicio = millis();
         const int codigo = http.POST(String(cuerpo));
@@ -109,7 +109,7 @@ namespace {
                 using A = ComunicacionServidor::Accion;
                 if (s.zona[z].fase == F::PRESENCIA && linea == prefijo+"ABRIR:"+s.zona[z].id) {
                     r.zona[z].accion = A::ABRIR;
-                } else if (z == 1 && s.zona[z].fase == F::PRESENCIA && linea == prefijo+"CANCELAR:"+s.zona[z].id) {
+                } else if (s.zona[z].fase == F::PRESENCIA && linea == prefijo+"CANCELAR:"+s.zona[z].id) {
                     r.zona[z].accion = A::CANCELAR;
                 } else if ((s.zona[z].fase == F::PASO || s.zona[z].fase == F::CANCELADA)
                         && linea == prefijo+"ACK:"+s.zona[z].id) {

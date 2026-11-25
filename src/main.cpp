@@ -2,7 +2,6 @@
 #include <esp_system.h>
 
 #include "Pines.h"
-#include "SensoresEntradaSalida.h"
 #include "SensoresPosicion.h"
 #include "Servomotor.h"
 #include "ComunicacionServidor.h"
@@ -11,7 +10,6 @@
 // SENSORES Y SERVOMOTORES
 // ==============================================
 
-SensoresEntradaSalida sensoresGarita;
 SensoresPosicion sensoresPosicion;
 
 Servomotor servoEntrada(
@@ -35,8 +33,7 @@ char arranqueGarita[17]{};
 struct EstadoBarrera {
     ComunicacionServidor::Garita estado;
     bool abierta = false;
-    bool contandoCierre = false;
-    unsigned long libreDesde = 0;
+    unsigned long abiertaDesde = 0;
 };
 
 EstadoBarrera barreraEntrada;
@@ -52,89 +49,14 @@ unsigned long ultimaImpresion = 0;
 // CONTROL DE BARRERAS
 // ==============================================
 
-void actualizarBarrera(
-    const char* nombre,
-    bool hayPresencia,
-    Servomotor& servo,
-    EstadoBarrera& barrera,
-    unsigned long ahora,
-    const ComunicacionServidor::Respuesta& respuesta
-) {
+// Solo para maqueta supervisada: los sensores de garita no intervienen.
+constexpr unsigned long TIEMPO_APERTURA_MAQUETA_MS = 8000;
+
+void actualizarBarreraOCR(const char* nombre, Servomotor& servo,
+                          EstadoBarrera& barrera, uint8_t pinLed,
+                          unsigned long ahora,
+                          const ComunicacionServidor::Respuesta& respuesta) {
     auto& estado = barrera.estado;
-    if (estado.fase == FaseGarita::PASO || estado.fase == FaseGarita::CANCELADA) {
-        if (respuesta.accion == Accion::ACK && strcmp(estado.id, respuesta.id) == 0) {
-            estado = ComunicacionServidor::Garita{};
-        } else {
-            return; // Mantener confirmacion hasta que NestJS la reciba.
-        }
-    }
-
-    if (hayPresencia) {
-        if (!barrera.abierta && estado.fase == FaseGarita::LIBRE) {
-            snprintf(estado.id, sizeof(estado.id), "%s-%lu", arranqueGarita,
-                     static_cast<unsigned long>(++secuenciaGarita));
-            estado.fase = FaseGarita::PRESENCIA;
-            Serial.printf("%s | Presencia IR. Esperando OCR y autorizacion (%s).\n", nombre, estado.id);
-        }
-        if (barrera.contandoCierre) {
-            barrera.contandoCierre = false;
-            Serial.printf(
-                "%s | Presencia nuevamente. Cierre cancelado.\n",
-                nombre
-            );
-        }
-
-        if (!barrera.abierta && estado.fase == FaseGarita::PRESENCIA &&
-            respuesta.accion == Accion::ABRIR && strcmp(estado.id, respuesta.id) == 0) {
-            servo.subir();
-            barrera.abierta = true;
-            estado.fase = FaseGarita::ABIERTA;
-            Serial.printf("%s | Autorizacion NestJS recibida.\n", nombre);
-
-            Serial.printf(
-                "%s | Abrir a %d grados.\n",
-                nombre, servo.getAnguloArriba()
-            );
-        }
-        return;
-    }
-
-    if (!barrera.abierta) {
-        if (estado.fase == FaseGarita::PRESENCIA) estado.fase = FaseGarita::CANCELADA;
-        return;
-    }
-
-    // Primera lectura libre: iniciar el temporizador de esta barrera.
-    if (!barrera.contandoCierre) {
-        barrera.libreDesde = ahora;
-        barrera.contandoCierre = true;
-
-        Serial.printf(
-            "%s | Libre. Cierre en %lu ms.\n",
-            nombre, TIEMPO_CIERRE_MS
-        );
-        return;
-    }
-
-    if (ahora - barrera.libreDesde >= TIEMPO_CIERRE_MS) {
-        servo.bajar();
-        barrera.abierta = false;
-        barrera.contandoCierre = false;
-        estado.fase = FaseGarita::PASO;
-
-        Serial.printf(
-            "%s | Cerrar a %d grados.\n",
-            nombre, servo.getAnguloAbajo()
-        );
-    }
-}
-
-// Exclusivo para la maqueta supervisada: no existe confirmación física de salida.
-constexpr unsigned long TIEMPO_SALIDA_MAQUETA_MS = 8000;
-unsigned long salidaAbiertaDesde = 0;
-
-void actualizarSalidaOCR(unsigned long ahora, const ComunicacionServidor::Respuesta& respuesta) {
-    auto& estado = barreraSalida.estado;
     const bool coincide = strcmp(estado.id, respuesta.id) == 0;
 
     if (estado.fase == FaseGarita::PASO || estado.fase == FaseGarita::CANCELADA) {
@@ -143,57 +65,47 @@ void actualizarSalidaOCR(unsigned long ahora, const ComunicacionServidor::Respue
         }
         return;
     }
-
     if (estado.fase == FaseGarita::LIBRE) {
         snprintf(estado.id, sizeof(estado.id), "%s-%lu", arranqueGarita,
                  static_cast<unsigned long>(++secuenciaGarita));
-        // PRESENCIA en este protocolo es un turno disponible para OCR, no una lectura IR.
+        // PRESENCIA representa un turno disponible para OCR, no presencia fisica.
         estado.fase = FaseGarita::PRESENCIA;
-        Serial.println("SALIDA | Lista para OCR y pago (sin IR).");
+        Serial.printf("%s | Lista para OCR (sin IR).\n", nombre);
         return;
     }
-
     if (estado.fase == FaseGarita::PRESENCIA) {
         if (respuesta.accion == Accion::CANCELAR && coincide) {
             estado.fase = FaseGarita::CANCELADA;
-            Serial.println("SALIDA | Turno OCR vencido, sin apertura.");
+            Serial.printf("%s | Turno OCR cancelado.\n", nombre);
         } else if (respuesta.accion == Accion::ABRIR && coincide) {
-            servoSalida.subir();
-            barreraSalida.abierta = true;
-            salidaAbiertaDesde = ahora;
+            servo.subir();
+            barrera.abierta = true;
+            barrera.abiertaDesde = ahora;
             estado.fase = FaseGarita::ABIERTA;
-            digitalWrite(PIN_LED_SALIDA, HIGH);
-            Serial.println("SALIDA | Pago autorizado. Barrera abierta por 8 segundos.");
+            digitalWrite(pinLed, HIGH);
+            Serial.printf("%s | Autorizacion NestJS. Abierta 8 segundos.\n", nombre);
         }
         return;
     }
-
     if (estado.fase == FaseGarita::ABIERTA &&
-        ahora - salidaAbiertaDesde >= TIEMPO_SALIDA_MAQUETA_MS) {
-        servoSalida.bajar();
-        barreraSalida.abierta = false;
-        digitalWrite(PIN_LED_SALIDA, LOW);
+        ahora - barrera.abiertaDesde >= TIEMPO_APERTURA_MAQUETA_MS) {
+        servo.bajar();
+        barrera.abierta = false;
+        digitalWrite(pinLed, LOW);
         estado.fase = FaseGarita::PASO;
-        Serial.println("SALIDA | Cierre temporizado (paso no verificado por IR).");
+        Serial.printf("%s | Cierre temporizado; paso no verificado.\n", nombre);
     }
 }
 
 void leerGaritas() {
-    // Entrada conserva su IR. Salida solo usa OCR y pago.
-    sensoresGarita.actualizar();
-
     const unsigned long ahora = millis();
-    if (!sensoresGarita.getCalibrado()) return;
     ComunicacionServidor::RespuestasGarita respuesta{};
     if (!ComunicacionServidor::recibirGaritas(respuesta) ||
         ahora - respuesta.tomada > 1500UL) respuesta = ComunicacionServidor::RespuestasGarita{};
-
-    actualizarBarrera(
-        "ENTRADA", sensoresGarita.getSensorEntrada(),
-        servoEntrada, barreraEntrada, ahora, respuesta.zona[0]
-    );
-
-    actualizarSalidaOCR(ahora, respuesta.zona[1]);
+    actualizarBarreraOCR("ENTRADA", servoEntrada, barreraEntrada,
+                         PIN_LED_ENTRADA, ahora, respuesta.zona[0]);
+    actualizarBarreraOCR("SALIDA", servoSalida, barreraSalida,
+                         PIN_LED_SALIDA, ahora, respuesta.zona[1]);
     ComunicacionServidor::publicarGaritas(barreraEntrada.estado, barreraSalida.estado);
 }
 
@@ -202,9 +114,7 @@ void leerGaritas() {
 // ==============================================
 
 void imprimirPlazas() {
-    Serial.printf("IR ENTRADA | ADC: %u | EMA: %.1f | Umbral: %u | %s\n",
-        unsigned(sensoresGarita.getValorAnalogicoEntrada()), sensoresGarita.getEMAEntrada(),
-        unsigned(sensoresGarita.getUmbralEntrada()), sensoresGarita.getSensorEntrada() ? "DETECTA" : "LIBRE");
+    Serial.printf("ENTRADA | OCR | Servo: %s\n", barreraEntrada.abierta ? "ABIERTA" : "CERRADA");
     Serial.printf("SALIDA | OCR y pago | Servo: %s\n", barreraSalida.abierta ? "ABIERTA" : "CERRADA");
     Serial.println("---------- PLAZAS ----------");
 
@@ -237,28 +147,21 @@ void setup() {
     Serial.begin(115200);
     Serial.println();
     Serial.println("SISTEMA DE ESTACIONAMIENTO");
-    Serial.println("Mantenga libres ambas garitas y las siete plazas.");
+    Serial.println("Mantenga libres las siete plazas. Garitas OCR sin IR.");
 
     snprintf(arranqueGarita, sizeof(arranqueGarita), "%08lx%08lx",
              static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()));
     servoEntrada.iniciar();
     servoSalida.iniciar();
 
-    // Los dos drivers usan GPIO18. Completar una calibracion por vez.
-    Serial.println("Calibrando sensores de entrada y salida...");
-    sensoresGarita.begin();
+    pinMode(PIN_LED_ENTRADA, OUTPUT);
+    pinMode(PIN_LED_SALIDA, OUTPUT);
+    digitalWrite(PIN_LED_ENTRADA, LOW);
+    digitalWrite(PIN_LED_SALIDA, LOW);
 
-    Serial.printf(
-        "Umbrales de garita | Entrada: %u | Salida: %u\n",
-        unsigned(sensoresGarita.getUmbralEntrada()),
-        unsigned(sensoresGarita.getUmbralSalida())
-    );
-
+    // Solo se calibran los sensores P1-P7. Su clase controla el emisor comun.
     Serial.println("Calibrando sensores de posicion P1 a P7...");
     plazasHabilitadas = sensoresPosicion.begin();
-
-    // Leer de nuevo las garitas ahora que los emisores IR estan encendidos.
-    leerGaritas();
 
     if (plazasHabilitadas) {
         imprimirPlazas();
@@ -276,6 +179,7 @@ void setup() {
 
     // Iniciar red solo despues de terminar la calibracion fisica.
     ComunicacionServidor::iniciar();
+    leerGaritas();
     if (plazasHabilitadas) ComunicacionServidor::publicar(sensoresPosicion);
 
     Serial.println("Monitoreo iniciado.");

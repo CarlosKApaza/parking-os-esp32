@@ -20,6 +20,9 @@ public:
     uint16_t getValorAnalogicoEntrada() const;
     uint16_t getValorAnalogicoSalida() const;
 
+    float getEMAEntrada() const;
+    float getEMASalida() const;
+
     uint16_t getUmbralEntrada() const;
     uint16_t getUmbralSalida() const;
 
@@ -40,6 +43,12 @@ private:
 
     uint16_t lecturaActualEntrada = 0;
     uint16_t lecturaActualSalida = 0;
+
+    // Un filtro independiente por sensor. Alfa bajo: mayor suavizado.
+    static constexpr float ALPHA_EMA = 0.10f;
+    float emaEntrada = 0.0f;
+    float emaSalida = 0.0f;
+    bool emaInicializada = false;
 
     uint16_t umbralEntrada = 0;
     uint16_t umbralSalida = 0;

@@ -23,6 +23,9 @@ void SensoresEntradaSalida::calibrar() {
     constexpr unsigned long tiempoPorFaseMs = 3000;
 
     calibrado = false;
+    emaInicializada = false;
+    objetoEntrada = false;
+    objetoSalida = false;
 
     // Fase 1. Encender los emisores y medir despues de la espera.
     digitalWrite(PIN_ACTIVAR_LEDS_IR, HIGH);
@@ -87,8 +90,19 @@ void SensoresEntradaSalida::actualizar() {
     lecturaActualEntrada = analogRead(PIN_SENSOR_ENTRADA);
     lecturaActualSalida  = analogRead(PIN_SENSOR_SALIDA);
 
-    objetoEntrada = lecturaActualEntrada > umbralEntrada;
-    objetoSalida  = lecturaActualSalida > umbralSalida;
+    // Inicializar con la primera muestra real, no con cero.
+    if (!emaInicializada) {
+        emaEntrada = lecturaActualEntrada;
+        emaSalida = lecturaActualSalida;
+        emaInicializada = true;
+    } else {
+        emaEntrada += ALPHA_EMA * (float(lecturaActualEntrada) - emaEntrada);
+        emaSalida  += ALPHA_EMA * (float(lecturaActualSalida) - emaSalida);
+    }
+
+    // Tanto los LEDs como las garitas consumen el mismo estado filtrado.
+    objetoEntrada = emaEntrada > umbralEntrada;
+    objetoSalida  = emaSalida > umbralSalida;
 
     digitalWrite(PIN_LED_ENTRADA, objetoEntrada ? HIGH : LOW);
     digitalWrite(PIN_LED_SALIDA, objetoSalida ? HIGH : LOW);
@@ -116,6 +130,14 @@ uint16_t SensoresEntradaSalida::getValorAnalogicoEntrada() const {
 
 uint16_t SensoresEntradaSalida::getValorAnalogicoSalida() const {
     return lecturaActualSalida;
+}
+
+float SensoresEntradaSalida::getEMAEntrada() const {
+    return emaEntrada;
+}
+
+float SensoresEntradaSalida::getEMASalida() const {
+    return emaSalida;
 }
 
 uint16_t SensoresEntradaSalida::getUmbralEntrada() const {

@@ -222,3 +222,4 @@ void loop() {
         imprimirPlazas();
     }
 }
+

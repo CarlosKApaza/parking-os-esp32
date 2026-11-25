@@ -62,8 +62,8 @@ constexpr unsigned int ESTABILIZACION_MUX_US = 2;
 constexpr uint8_t PIN_SERVO_ENTRADA = 26;
 constexpr uint8_t PIN_SERVO_SALIDA  = 27;
 
-constexpr int ANGULO_ARRIBA_ENTRADA = 40;   // Barrera abierta
-constexpr int ANGULO_ABAJO_ENTRADA  = 130;  // Barrera cerrada
+constexpr int ANGULO_ARRIBA_ENTRADA = 50;   // Abierta
+constexpr int ANGULO_ABAJO_ENTRADA  = 140;  // Cerrada
 constexpr int ANGULO_ARRIBA_SALIDA  = 90;
 constexpr int ANGULO_ABAJO_SALIDA   = 0;
 

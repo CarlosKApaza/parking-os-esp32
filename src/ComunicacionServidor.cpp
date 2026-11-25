@@ -20,6 +20,12 @@ namespace {
         unsigned long tomada;
     };
     QueueHandle_t cola = nullptr;
+    struct SnapshotGarita {
+        ComunicacionServidor::Garita zona[2]{};
+        unsigned long tomada = 0;
+    };
+    QueueHandle_t colaGarita = nullptr;
+    QueueHandle_t colaRespuesta = nullptr;
 
 #if PARKING_CONFIGURADO
     struct EstadoEnvio {
@@ -48,6 +54,77 @@ namespace {
         return codigo >= 200 && codigo < 300;
     }
 
+    const char* faseTexto(ComunicacionServidor::FaseGarita fase) {
+        using F = ComunicacionServidor::FaseGarita;
+        switch (fase) {
+            case F::PRESENCIA: return "PRESENCIA";
+            case F::ABIERTA: return "ABIERTA";
+            case F::PASO: return "PASO";
+            case F::CANCELADA: return "CANCELADA";
+            default: return "LIBRE";
+        }
+    }
+
+    void sincronizarGaritas(const SnapshotGarita& s) {
+        String url(SERVIDOR_URL);
+        const int indice = url.lastIndexOf("/sensores/lecturas");
+        if (indice < 0) return;
+        url = url.substring(0, indice) + "/garitas/sincronizar";
+        WiFiClient cliente;
+        HTTPClient http;
+        http.setConnectTimeout(900);
+        http.setTimeout(900);
+        if (!http.begin(cliente, url)) return;
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("x-esp32-key", ESP32_API_KEY);
+        char cuerpo[240];
+        snprintf(cuerpo, sizeof(cuerpo),
+            "{\"ENTRADA\":{\"id\":\"%s\",\"fase\":\"%s\"},\"SALIDA\":{\"id\":\"%s\",\"fase\":\"%s\"}}",
+            s.zona[0].id, faseTexto(s.zona[0].fase), s.zona[1].id, faseTexto(s.zona[1].fase));
+        const unsigned long inicio = millis();
+        const int codigo = http.POST(String(cuerpo));
+        String texto;
+        if (codigo >= 200 && codigo < 300) texto = http.getString();
+        http.end();
+        if (codigo < 200 || codigo >= 300) {
+            static unsigned long ultimoError = 0;
+            if (millis() - ultimoError >= 3000UL) {
+                ultimoError = millis();
+                Serial.printf("[GARITA] HTTP %d (sin autorizacion)\n", codigo);
+            }
+            return;
+        }
+        if (millis() - inicio > 1500UL || texto.length() > 160) return;
+        ComunicacionServidor::RespuestasGarita r{};
+        r.tomada = inicio;
+        bool alguna = false;
+        for (uint8_t z=0; z<2; ++z) {
+            if (s.zona[z].id[0] == '\0') continue;
+            const String prefijo(z == 0 ? "ENTRADA:" : "SALIDA:");
+            for (int pos=0; pos < int(texto.length());) {
+                const int fin = texto.indexOf('\n', pos);
+                String linea = fin < 0 ? texto.substring(pos) : texto.substring(pos,fin);
+                linea.trim();
+                using F = ComunicacionServidor::FaseGarita;
+                using A = ComunicacionServidor::Accion;
+                if (s.zona[z].fase == F::PRESENCIA && linea == prefijo+"ABRIR:"+s.zona[z].id) {
+                    r.zona[z].accion = A::ABRIR;
+                } else if ((s.zona[z].fase == F::PASO || s.zona[z].fase == F::CANCELADA)
+                        && linea == prefijo+"ACK:"+s.zona[z].id) {
+                    r.zona[z].accion = A::ACK;
+                }
+                if (r.zona[z].accion != A::NINGUNA) {
+                    snprintf(r.zona[z].id, sizeof(r.zona[z].id), "%s", s.zona[z].id);
+                    alguna = true;
+                    break;
+                }
+                if (fin < 0) break;
+                pos = fin+1;
+            }
+        }
+        if (alguna) xQueueOverwrite(colaRespuesta, &r);
+    }
+
     void tareaRed(void*) {
         WiFi.mode(WIFI_STA);
         WiFi.persistent(false);
@@ -59,6 +136,7 @@ namespace {
         Snapshot actual{};
         bool haySnapshot = false;
         uint8_t siguiente = 0;
+        unsigned long ultimaGarita = 0;
 
         for (;;) {
             Snapshot nuevo{};
@@ -83,6 +161,22 @@ namespace {
                 Serial.printf("[RED] WiFi conectado. IP: %s\n", WiFi.localIP().toString().c_str());
                 // Reenviar las siete plazas al recuperar la red.
                 for (auto& e : estados) e = EstadoEnvio{};
+            }
+
+            // Intercalar una consulta de garitas con el reporte de plazas.
+            // Nunca ejecutar HTTP desde loop() ni enviar un estado local antiguo.
+            if (ahora - ultimaGarita >= 250UL) {
+                SnapshotGarita g{};
+                if (xQueuePeek(colaGarita, &g, 0) == pdTRUE && ahora - g.tomada <= 500UL) {
+                    sincronizarGaritas(g);
+                }
+                ultimaGarita = millis();
+                ahora = millis();
+                Snapshot reciente{};
+                if (xQueueReceive(cola, &reciente, 0) == pdTRUE) {
+                    actual = reciente;
+                    haySnapshot = true;
+                }
             }
 
             // No presentar como reciente una lectura si el control local dejo de actualizar.
@@ -125,13 +219,21 @@ void ComunicacionServidor::iniciar() {
         return;
     }
     cola = xQueueCreate(1, sizeof(Snapshot));
-    if (!cola) {
-        Serial.println("[RED] No se pudo crear la cola; control local activo.");
+    colaGarita = xQueueCreate(1, sizeof(SnapshotGarita));
+    colaRespuesta = xQueueCreate(1, sizeof(RespuestasGarita));
+    if (!cola || !colaGarita || !colaRespuesta) {
+        if (cola) vQueueDelete(cola);
+        if (colaGarita) vQueueDelete(colaGarita);
+        if (colaRespuesta) vQueueDelete(colaRespuesta);
+        cola = colaGarita = colaRespuesta = nullptr;
+        Serial.println("[RED] No se pudo crear la cola; barreras sin autorizacion.");
         return;
     }
     if (xTaskCreate(tareaRed, "parking-red", 8192, nullptr, 1, nullptr) != pdPASS) {
         vQueueDelete(cola);
-        cola = nullptr;
+        vQueueDelete(colaGarita);
+        vQueueDelete(colaRespuesta);
+        cola = colaGarita = colaRespuesta = nullptr;
         Serial.println("[RED] No se pudo iniciar la tarea; control local activo.");
     }
 #else
@@ -148,4 +250,17 @@ void ComunicacionServidor::publicar(const SensoresPosicion& sensores) {
     }
     s.tomada = millis();
     xQueueOverwrite(cola, &s);
+}
+
+void ComunicacionServidor::publicarGaritas(const Garita& entrada, const Garita& salida) {
+    if (!colaGarita) return;
+    SnapshotGarita s{};
+    s.zona[0] = entrada;
+    s.zona[1] = salida;
+    s.tomada = millis();
+    xQueueOverwrite(colaGarita, &s);
+}
+
+bool ComunicacionServidor::recibirGaritas(RespuestasGarita& respuesta) {
+    return colaRespuesta && xQueueReceive(colaRespuesta, &respuesta, 0) == pdTRUE;
 }

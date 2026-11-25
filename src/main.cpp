@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 
 #include "Pines.h"
 #include "SensoresEntradaSalida.h"
@@ -15,8 +16,8 @@ SensoresPosicion sensoresPosicion;
 
 Servomotor servoEntrada(
     PIN_SERVO_ENTRADA,      // GPIO26
-    ANGULO_ARRIBA_ENTRADA,  // Abierta: 40 grados
-    ANGULO_ABAJO_ENTRADA    // Cerrada: 130 grados
+    ANGULO_ARRIBA_ENTRADA,  // Abierta: 50 grados
+    ANGULO_ABAJO_ENTRADA    // Cerrada: 140 grados
 );
 
 Servomotor servoSalida(
@@ -25,7 +26,14 @@ Servomotor servoSalida(
     ANGULO_ABAJO_SALIDA     // Cerrada: 0 grados
 );
 
+using ComunicacionServidor::FaseGarita;
+using ComunicacionServidor::Accion;
+
+uint32_t secuenciaGarita = 0;
+char arranqueGarita[17]{};
+
 struct EstadoBarrera {
+    ComunicacionServidor::Garita estado;
     bool abierta = false;
     bool contandoCierre = false;
     unsigned long libreDesde = 0;
@@ -49,9 +57,25 @@ void actualizarBarrera(
     bool hayPresencia,
     Servomotor& servo,
     EstadoBarrera& barrera,
-    unsigned long ahora
+    unsigned long ahora,
+    const ComunicacionServidor::Respuesta& respuesta
 ) {
+    auto& estado = barrera.estado;
+    if (estado.fase == FaseGarita::PASO || estado.fase == FaseGarita::CANCELADA) {
+        if (respuesta.accion == Accion::ACK && strcmp(estado.id, respuesta.id) == 0) {
+            estado = ComunicacionServidor::Garita{};
+        } else {
+            return; // Mantener confirmacion hasta que NestJS la reciba.
+        }
+    }
+
     if (hayPresencia) {
+        if (!barrera.abierta && estado.fase == FaseGarita::LIBRE) {
+            snprintf(estado.id, sizeof(estado.id), "%s-%lu", arranqueGarita,
+                     static_cast<unsigned long>(++secuenciaGarita));
+            estado.fase = FaseGarita::PRESENCIA;
+            Serial.printf("%s | Presencia IR. Esperando OCR y autorizacion (%s).\n", nombre, estado.id);
+        }
         if (barrera.contandoCierre) {
             barrera.contandoCierre = false;
             Serial.printf(
@@ -60,9 +84,12 @@ void actualizarBarrera(
             );
         }
 
-        if (!barrera.abierta) {
+        if (!barrera.abierta && estado.fase == FaseGarita::PRESENCIA &&
+            respuesta.accion == Accion::ABRIR && strcmp(estado.id, respuesta.id) == 0) {
             servo.subir();
             barrera.abierta = true;
+            estado.fase = FaseGarita::ABIERTA;
+            Serial.printf("%s | Autorizacion NestJS recibida.\n", nombre);
 
             Serial.printf(
                 "%s | Abrir a %d grados.\n",
@@ -73,6 +100,7 @@ void actualizarBarrera(
     }
 
     if (!barrera.abierta) {
+        if (estado.fase == FaseGarita::PRESENCIA) estado.fase = FaseGarita::CANCELADA;
         return;
     }
 
@@ -92,6 +120,7 @@ void actualizarBarrera(
         servo.bajar();
         barrera.abierta = false;
         barrera.contandoCierre = false;
+        estado.fase = FaseGarita::PASO;
 
         Serial.printf(
             "%s | Cerrar a %d grados.\n",
@@ -105,16 +134,21 @@ void leerGaritas() {
     sensoresGarita.actualizar();
 
     const unsigned long ahora = millis();
+    if (!sensoresGarita.getCalibrado()) return;
+    ComunicacionServidor::RespuestasGarita respuesta{};
+    if (!ComunicacionServidor::recibirGaritas(respuesta) ||
+        ahora - respuesta.tomada > 1500UL) respuesta = ComunicacionServidor::RespuestasGarita{};
 
     actualizarBarrera(
         "ENTRADA", sensoresGarita.getSensorEntrada(),
-        servoEntrada, barreraEntrada, ahora
+        servoEntrada, barreraEntrada, ahora, respuesta.zona[0]
     );
 
     actualizarBarrera(
         "SALIDA", sensoresGarita.getSensorSalida(),
-        servoSalida, barreraSalida, ahora
+        servoSalida, barreraSalida, ahora, respuesta.zona[1]
     );
+    ComunicacionServidor::publicarGaritas(barreraEntrada.estado, barreraSalida.estado);
 }
 
 // ==============================================
@@ -155,6 +189,8 @@ void setup() {
     Serial.println("SISTEMA DE ESTACIONAMIENTO");
     Serial.println("Mantenga libres ambas garitas y las siete plazas.");
 
+    snprintf(arranqueGarita, sizeof(arranqueGarita), "%08lx%08lx",
+             static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()));
     servoEntrada.iniciar();
     servoSalida.iniciar();
 

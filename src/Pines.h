@@ -62,8 +62,8 @@ constexpr unsigned int ESTABILIZACION_MUX_US = 2;
 constexpr uint8_t PIN_SERVO_ENTRADA = 26;
 constexpr uint8_t PIN_SERVO_SALIDA  = 27;
 
-constexpr int ANGULO_ARRIBA_ENTRADA = 0;
-constexpr int ANGULO_ABAJO_ENTRADA  = 90;
+constexpr int ANGULO_ARRIBA_ENTRADA = 40;   // Barrera abierta
+constexpr int ANGULO_ABAJO_ENTRADA  = 130;  // Barrera cerrada
 constexpr int ANGULO_ARRIBA_SALIDA  = 90;
 constexpr int ANGULO_ABAJO_SALIDA   = 0;
 
@@ -84,7 +84,7 @@ constexpr uint8_t PIN_I2C_SCL = 21;
 // 9. TIEMPOS DE FUNCIONAMIENTO
 // ==============================================
 
-constexpr unsigned long TIEMPO_CIERRE_MS               = 2000;
+constexpr unsigned long TIEMPO_CIERRE_MS               = 3000;
 constexpr unsigned long REPORTE_MS                     = 30000;
 constexpr unsigned long REINTENTO_MS                   = 5000;
 constexpr unsigned long INTERVALO_GARITA_MS            = 100;

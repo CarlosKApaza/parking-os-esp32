@@ -3,10 +3,35 @@
 #include "Pines.h"
 #include "SensoresEntradaSalida.h"
 #include "SensoresPosicion.h"
+#include "Servomotor.h"
 
-// Cada clase controla los LEDs correspondientes a sus sensores.
+// ==============================================
+// SENSORES Y SERVOMOTORES
+// ==============================================
+
 SensoresEntradaSalida sensoresGarita;
 SensoresPosicion sensoresPosicion;
+
+Servomotor servoEntrada(
+    PIN_SERVO_ENTRADA,      // GPIO26
+    ANGULO_ARRIBA_ENTRADA,  // Abierta: 40 grados
+    ANGULO_ABAJO_ENTRADA    // Cerrada: 130 grados
+);
+
+Servomotor servoSalida(
+    PIN_SERVO_SALIDA,       // GPIO27
+    ANGULO_ARRIBA_SALIDA,   // Abierta: 90 grados
+    ANGULO_ABAJO_SALIDA     // Cerrada: 0 grados
+);
+
+struct EstadoBarrera {
+    bool abierta = false;
+    bool contandoCierre = false;
+    unsigned long libreDesde = 0;
+};
+
+EstadoBarrera barreraEntrada;
+EstadoBarrera barreraSalida;
 
 bool plazasHabilitadas = false;
 
@@ -15,78 +40,88 @@ unsigned long ultimaLecturaPlazas = 0;
 unsigned long ultimaImpresion = 0;
 
 // ==============================================
-// RESULTADOS DE CALIBRACION
+// CONTROL DE BARRERAS
 // ==============================================
 
-void imprimirCalibracion() {
-    Serial.println();
-    Serial.println("========== CALIBRACION DE GARITAS ==========");
+void actualizarBarrera(
+    const char* nombre,
+    bool hayPresencia,
+    Servomotor& servo,
+    EstadoBarrera& barrera,
+    unsigned long ahora
+) {
+    if (hayPresencia) {
+        if (barrera.contandoCierre) {
+            barrera.contandoCierre = false;
+            Serial.printf(
+                "%s | Presencia nuevamente. Cierre cancelado.\n",
+                nombre
+            );
+        }
 
-    Serial.printf(
-        "ENTRADA | Con IR: %u | Sin IR: %u | Umbral: %u\n",
-        unsigned(sensoresGarita.getMinimoEntrada()),
-        unsigned(sensoresGarita.getMaximoEntrada()),
-        unsigned(sensoresGarita.getUmbralEntrada())
-    );
+        if (!barrera.abierta) {
+            servo.subir();
+            barrera.abierta = true;
 
-    Serial.printf(
-        "SALIDA  | Con IR: %u | Sin IR: %u | Umbral: %u\n",
-        unsigned(sensoresGarita.getMinimoSalida()),
-        unsigned(sensoresGarita.getMaximoSalida()),
-        unsigned(sensoresGarita.getUmbralSalida())
-    );
-
-    if (!plazasHabilitadas) {
+            Serial.printf(
+                "%s | Abrir a %d grados.\n",
+                nombre, servo.getAnguloArriba()
+            );
+        }
         return;
     }
 
-    Serial.println();
-    Serial.println("========== CALIBRACION DE PLAZAS ==========");
+    if (!barrera.abierta) {
+        return;
+    }
 
-    for (uint8_t plaza = 1; plaza <= CANTIDAD_INDICADORES; ++plaza) {
-        const uint16_t conIR = sensoresPosicion.getReferenciaConIR(plaza);
-        const uint16_t sinIR = sensoresPosicion.getReferenciaSinIR(plaza);
+    // Primera lectura libre: iniciar el temporizador de esta barrera.
+    if (!barrera.contandoCierre) {
+        barrera.libreDesde = ahora;
+        barrera.contandoCierre = true;
 
         Serial.printf(
-            "P%u | Con IR: %u | Sin IR: %u | Diferencia: %+d"
-            " | Umbral: %u | %s\n",
-            unsigned(plaza),
-            unsigned(conIR),
-            unsigned(sinIR),
-            int(sinIR) - int(conIR),
-            unsigned(sensoresPosicion.getUmbral(plaza)),
-            sensoresPosicion.estaCalibrada(plaza)
-                ? "CALIBRADA"
-                : "REVISAR CALIBRACION"
+            "%s | Libre. Cierre en %lu ms.\n",
+            nombre, TIEMPO_CIERRE_MS
+        );
+        return;
+    }
+
+    if (ahora - barrera.libreDesde >= TIEMPO_CIERRE_MS) {
+        servo.bajar();
+        barrera.abierta = false;
+        barrera.contandoCierre = false;
+
+        Serial.printf(
+            "%s | Cerrar a %d grados.\n",
+            nombre, servo.getAnguloAbajo()
         );
     }
 }
 
-// ==============================================
-// ESTADOS DE ENTRADA, SALIDA Y PLAZAS
-// ==============================================
+void leerGaritas() {
+    // Lee GPIO36 y GPIO39 y actualiza los LEDs de GPIO14 y GPIO13.
+    sensoresGarita.actualizar();
 
-void imprimirEstados() {
-    Serial.println();
-    Serial.println("========== ESTADO DEL ESTACIONAMIENTO ==========");
+    const unsigned long ahora = millis();
 
-    Serial.printf(
-        "ENTRADA | ADC: %u | Umbral: %u | %s\n",
-        unsigned(sensoresGarita.getValorAnalogicoEntrada()),
-        unsigned(sensoresGarita.getUmbralEntrada()),
-        sensoresGarita.getSensorEntrada() ? "COCHE PRESENTE" : "LIBRE"
+    actualizarBarrera(
+        "ENTRADA", sensoresGarita.getSensorEntrada(),
+        servoEntrada, barreraEntrada, ahora
     );
 
-    Serial.printf(
-        "SALIDA  | ADC: %u | Umbral: %u | %s\n",
-        unsigned(sensoresGarita.getValorAnalogicoSalida()),
-        unsigned(sensoresGarita.getUmbralSalida()),
-        sensoresGarita.getSensorSalida() ? "COCHE PRESENTE" : "LIBRE"
+    actualizarBarrera(
+        "SALIDA", sensoresGarita.getSensorSalida(),
+        servoSalida, barreraSalida, ahora
     );
+}
 
-    if (!plazasHabilitadas) {
-        return;
-    }
+// ==============================================
+// MONITOR SERIE DE LAS SIETE PLAZAS
+// ==============================================
+
+void imprimirPlazas() {
+    Serial.println("---------- PLAZAS ----------");
 
     for (uint8_t plaza = 1; plaza <= CANTIDAD_INDICADORES; ++plaza) {
         const char* estado = "REVISAR CALIBRACION";
@@ -115,33 +150,44 @@ void imprimirEstados() {
 
 void setup() {
     Serial.begin(115200);
-
     Serial.println();
     Serial.println("SISTEMA DE ESTACIONAMIENTO");
-    Serial.println("Mantenga libres la entrada, la salida y las siete plazas.");
+    Serial.println("Mantenga libres ambas garitas y las siete plazas.");
 
-    // Ambas clases usan GPIO18. Completar una calibracion antes de iniciar la otra.
-    Serial.println("Calibrando entrada y salida...");
+    servoEntrada.iniciar();
+    servoSalida.iniciar();
+
+    // Los dos drivers usan GPIO18. Completar una calibracion por vez.
+    Serial.println("Calibrando sensores de entrada y salida...");
     sensoresGarita.begin();
 
-    Serial.println("Calibrando posiciones P1 a P7...");
+    Serial.printf(
+        "Umbrales de garita | Entrada: %u | Salida: %u\n",
+        unsigned(sensoresGarita.getUmbralEntrada()),
+        unsigned(sensoresGarita.getUmbralSalida())
+    );
+
+    Serial.println("Calibrando sensores de posicion P1 a P7...");
     plazasHabilitadas = sensoresPosicion.begin();
 
-    if (!plazasHabilitadas) {
-        Serial.println("Plazas deshabilitadas. Revise PIN_ADC_MUX_Z en Pines.h.");
+    // Leer de nuevo las garitas ahora que los emisores IR estan encendidos.
+    leerGaritas();
+
+    if (plazasHabilitadas) {
+        imprimirPlazas();
+    } else {
+        Serial.println(
+            "Plazas deshabilitadas. Revise PIN_ADC_MUX_Z. "
+            "Las garitas siguen activas."
+        );
     }
-
-    // Los emisores ya estan encendidos para el funcionamiento normal.
-    // Refrescar las garitas tras el tiempo dedicado a calibrar las plazas.
-    sensoresGarita.actualizar();
-
-    imprimirCalibracion();
-    imprimirEstados();
 
     const unsigned long ahora = millis();
     ultimaLecturaGarita = ahora;
     ultimaLecturaPlazas = ahora;
     ultimaImpresion = ahora;
+
+    Serial.println("Monitoreo iniciado.");
 }
 
 // ==============================================
@@ -151,22 +197,22 @@ void setup() {
 void loop() {
     const unsigned long ahora = millis();
 
-    // Cada 100 ms: leer entrada/salida y actualizar sus dos LEDs.
     if (ahora - ultimaLecturaGarita >= INTERVALO_GARITA_MS) {
         ultimaLecturaGarita = ahora;
-        sensoresGarita.actualizar();
+        leerGaritas();
     }
 
-    // Cada 500 ms: leer P1 a P7 y actualizar sus LEDs en el 74HC595.
     if (plazasHabilitadas &&
         ahora - ultimaLecturaPlazas >= INTERVALO_ESTACIONAMIENTOS_MS) {
         ultimaLecturaPlazas = ahora;
+
+        // Lee P1-P7 por el 74HC4051 y actualiza QB-QH en el 74HC595.
         sensoresPosicion.actualizar();
     }
 
-    // Cada 500 ms: mostrar la ultima lectura de los nueve sensores.
-    if (ahora - ultimaImpresion >= INTERVALO_IMPRESION_MS) {
+    if (plazasHabilitadas &&
+        ahora - ultimaImpresion >= INTERVALO_IMPRESION_MS) {
         ultimaImpresion = ahora;
-        imprimirEstados();
+        imprimirPlazas();
     }
 }

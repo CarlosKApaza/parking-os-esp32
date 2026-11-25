@@ -13,14 +13,17 @@ void Servomotor::iniciar() {
     bajar();
 }
 
+void Servomotor::moverA(int angulo) {
+    anguloActual = constrain(angulo, 0, 180);
+    servo.write(anguloActual);
+}
+
 void Servomotor::subir() {
-    servo.write(anguloArriba);
-    anguloActual = anguloArriba;
+    moverA(anguloArriba);
 }
 
 void Servomotor::bajar() {
-    servo.write(anguloAbajo);
-    anguloActual = anguloAbajo;
+    moverA(anguloAbajo);
 }
 
 int Servomotor::getAnguloArriba() const {

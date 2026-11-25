@@ -11,6 +11,7 @@ public:
     void iniciar();
     void subir();
     void bajar();
+    void moverA(int angulo);
 
     int getAnguloArriba() const;
     int getAnguloAbajo() const;
